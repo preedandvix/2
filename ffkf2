@@ -1,1 +1,235 @@
-online=true
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Ładny śnieg – demo</title>
+  <style>
+    :root{
+      --panel-bg: rgba(20,22,30,.6);
+      --panel-blur: blur(8px);
+      --panel-border: rgba(255,255,255,.15);
+      --accent: #aee1ff;
+      --text: #eaf6ff;
+    }
+    html,body{height:100%; margin:0;}
+    body{
+      font-family: system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, Cantarell, Noto Sans, Arial, "Apple Color Emoji", "Segoe UI Emoji";
+      background: radial-gradient(1200px 800px at 20% 20%, #19202a, #0f141c 60%, #0b0f15 100%);
+      overflow:hidden; color:var(--text);
+    }
+    canvas{position:fixed; inset:0; display:block;}
+
+    /* Panel sterowania */
+    .panel{
+      position: fixed; right: 16px; top: 16px; z-index: 10;
+      padding: 14px 14px 10px; border-radius: 16px;
+      background: var(--panel-bg); backdrop-filter: var(--panel-blur);
+      -webkit-backdrop-filter: var(--panel-blur);
+      border: 1px solid var(--panel-border);
+      box-shadow: 0 10px 30px rgba(0,0,0,.35);
+      width: 280px; max-width: calc(100% - 32px);
+    }
+    .panel h1{margin:0 0 10px; font-size: 16px; letter-spacing:.2px; color: var(--accent);}
+    .row{display:grid; grid-template-columns: 1fr auto; align-items:center; gap:8px; margin:8px 0;}
+    .row input[type="range"]{width: 160px;}
+    .row label{font-size:12px; opacity:.9}
+    .small{font-size: 11px; opacity: .8; margin-top: 8px}
+    .btns{display:flex; gap:8px; margin-top: 10px}
+    button, .toggle{
+      appearance:none; border:1px solid var(--panel-border); border-radius: 12px; padding:8px 10px;
+      background: rgba(255,255,255,.06); color: var(--text); cursor: pointer; font-weight: 600;
+    }
+    button:hover, .toggle:hover{background: rgba(255,255,255,.12)}
+    .toggle input{display:none}
+    .toggle span{font-size:12px}
+    .footer{font-size:10px; opacity:.65; margin-top:10px}
+
+    /* Dla osób z ograniczeniami ruchu – zmniejsz animacje */
+    @media (prefers-reduced-motion: reduce){
+      body{background: #0f141c}
+    }
+  </style>
+</head>
+<body>
+  <canvas id="snow"></canvas>
+  <div class="panel" aria-label="Panel sterowania śniegiem">
+    <h1>❄️ Ustawienia śniegu</h1>
+
+    <div class="row">
+      <label for="density">Gęstość</label>
+      <input id="density" type="range" min="50" max="800" value="300" />
+    </div>
+    <div class="row">
+      <label for="speed">Prędkość</label>
+      <input id="speed" type="range" min="0.3" max="3.0" step="0.1" value="1.0" />
+    </div>
+    <div class="row">
+      <label for="size">Rozmiar płatków</label>
+      <input id="size" type="range" min="1" max="5" step="0.1" value="2.2" />
+    </div>
+    <div class="row">
+      <label for="wind">Wiatr</label>
+      <input id="wind" type="range" min="-2.0" max="2.0" step="0.1" value="0.2" />
+    </div>
+
+    <div class="btns">
+      <label class="toggle"><input id="pretty" type="checkbox" checked /><span>✨ Ładny tryb</span></label>
+      <button id="pauseBtn" type="button">⏸️ Pauza</button>
+      <button id="fsBtn" type="button">⛶ Pełny ekran</button>
+    </div>
+
+    <div class="footer">Wskazówka: przesuń suwak wiatru, by zmienić kierunek lotu ❄️</div>
+  </div>
+
+  <script>
+  (() => {
+    const canvas = document.getElementById('snow');
+    const ctx = canvas.getContext('2d');
+
+    const ui = {
+      density: document.getElementById('density'),
+      speed: document.getElementById('speed'),
+      size: document.getElementById('size'),
+      wind: document.getElementById('wind'),
+      pretty: document.getElementById('pretty'),
+      pauseBtn: document.getElementById('pauseBtn'),
+      fsBtn: document.getElementById('fsBtn'),
+    };
+
+    let W = canvas.width = window.innerWidth;
+    let H = canvas.height = window.innerHeight;
+
+    const flakes = [];
+    let targetCount = +ui.density.value;
+    let paused = false;
+    const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+    function rand(min, max){ return Math.random() * (max - min) + min; }
+    function resize(){ W = canvas.width = window.innerWidth; H = canvas.height = window.innerHeight; }
+
+    window.addEventListener('resize', resize);
+
+    function addFlakes(n){
+      for(let i=0;i<n;i++){
+        const r = rand(0.5, +ui.size.value);
+        flakes.push({
+          x: rand(0, W), y: rand(-H, 0), r,
+          vy: r * rand(.35, .9) * +ui.speed.value,
+          vx: rand(-.3, .3) + +ui.wind.value * 0.2,
+          o: rand(.5, 1), tw: rand(0, Math.PI*2)
+        });
+      }
+    }
+
+    function ensureCount(){
+      targetCount = Math.floor(+ui.density.value);
+      while(flakes.length < targetCount) addFlakes(10);
+      while(flakes.length > targetCount) flakes.pop();
+    }
+
+    function drawFlake(f){
+      const pretty = ui.pretty.checked;
+      ctx.globalAlpha = f.o;
+
+      if(pretty){
+        // delikatna poświata
+        ctx.shadowBlur = 8; ctx.shadowColor = 'rgba(255,255,255,0.9)';
+      }else{
+        ctx.shadowBlur = 0;
+      }
+
+      // subtelne migotanie w trybie "ładnym"
+      const twinkle = pretty ? (Math.sin(f.tw += 0.02) * 0.2 + 0.8) : 1;
+
+      ctx.beginPath();
+      ctx.arc(f.x, f.y, f.r * twinkle, 0, Math.PI*2);
+      ctx.fillStyle = '#ffffff';
+      ctx.fill();
+
+      if(pretty){
+        // mały "krzyżyk" lodowy
+        ctx.beginPath();
+        ctx.moveTo(f.x - f.r, f.y);
+        ctx.lineTo(f.x + f.r, f.y);
+        ctx.moveTo(f.x, f.y - f.r);
+        ctx.lineTo(f.x, f.y + f.r);
+        ctx.globalAlpha = f.o * 0.6;
+        ctx.lineWidth = 0.5;
+        ctx.strokeStyle = 'rgba(255,255,255,0.9)';
+        ctx.stroke();
+      }
+      ctx.globalAlpha = 1;
+    }
+
+    function updateFlake(f, t){
+      const wind = +ui.wind.value + Math.sin((f.y + t*0.0005)) * 0.15; // lekka fala
+      const speedMul = +ui.speed.value;
+      const sizeMul = (+ui.size.value) / 2.2; // normalizuj
+
+      f.vx += (wind - f.vx) * 0.01; // wygładzenie zmiany wiatru
+      f.x += f.vx * (reducedMotion?0.3:1);
+      f.y += f.vy * speedMul * (reducedMotion?0.5:1);
+
+      // delikatny dryf sinusoidalny zależny od rozmiaru
+      f.x += Math.sin((f.y + t*0.001)) * 0.1 * sizeMul;
+
+      if(f.y - f.r > H){
+        f.y = -rand(5, 50);
+        f.x = rand(0, W);
+        f.vy = f.r * rand(.35, .9) * +ui.speed.value;
+        f.vx = rand(-.3, .3) + +ui.wind.value * 0.2;
+        f.o = rand(.5, 1);
+      }
+      if(f.x + f.r < 0) f.x = W + f.r;
+      if(f.x - f.r > W) f.x = -f.r;
+    }
+
+    // Inicjalizacja
+    addFlakes(targetCount);
+
+    let prev = 0;
+    function loop(t){
+      if(!paused){
+        if(!prev) prev = t; const dt = t - prev; prev = t;
+        ctx.clearRect(0,0,W,H);
+        ensureCount();
+        for(let i=0;i<flakes.length;i++){
+          updateFlake(flakes[i], t);
+          drawFlake(flakes[i]);
+        }
+      }
+      requestAnimationFrame(loop);
+    }
+    requestAnimationFrame(loop);
+
+    // UI
+    ['density','speed','size','wind','pretty'].forEach(id=>{
+      ui[id].addEventListener('input', () => {
+        if(id==='density') ensureCount();
+      });
+    });
+
+    ui.pauseBtn.addEventListener('click', () => {
+      paused = !paused;
+      ui.pauseBtn.textContent = paused ? '▶️ Wznów' : '⏸️ Pauza';
+    });
+
+    ui.fsBtn.addEventListener('click', async () => {
+      try{
+        if(!document.fullscreenElement){
+          await document.documentElement.requestFullscreen();
+          ui.fsBtn.textContent = '⤢ Wyjdź z pełnego ekranu';
+        }else{
+          await document.exitFullscreen();
+          ui.fsBtn.textContent = '⛶ Pełny ekran';
+        }
+      }catch(e){
+        console.warn(e);
+      }
+    });
+
+  })();
+  </script>
+</body>
+</html>
